@@ -1,9 +1,10 @@
 import streamlit as st
 import pandas as pd
 from datetime import date
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 
 # --- Streamlit config ---
-st.set_page_config(page_title="Dashboard", layout="wide")
+st.set_page_config(page_title="Marketing Performance & Pipeline Dashboard", layout="wide")
 
 # -----------------------
 # Helpers
@@ -30,7 +31,6 @@ def to_numeric_inplace(df: pd.DataFrame, cols):
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-
 def load_excel(file):
     return pd.ExcelFile(file)
 
@@ -54,6 +54,52 @@ def parse_range(r):
         return r[0], r[1]
     return None, None
 
+def apply_cross_filters(df_completed: pd.DataFrame, df_requested: pd.DataFrame, filters: dict):
+    """Apply table-driven filters (Category/Client/Sector) to completed/requested frames."""
+    def _apply(df):
+        if df is None or df.empty:
+            return df
+        out = df.copy()
+
+        # Category
+        if 'Category' in out.columns:
+            out['_norm_cat'] = safe_series(out, 'Category').map(normalize_category)
+            if filters.get('Category'):
+                out = out.loc[out['_norm_cat'] == filters['Category']]
+
+        # Client (strict)
+        if filters.get('Client') and 'Client' in out.columns:
+            out = out.loc[out['Client'].astype('string').str.strip().replace('', 'Unknown') == filters['Client']]
+
+        # Sector (strict)
+        if filters.get('Sector') and 'Sector' in out.columns:
+            out = out.loc[out['Sector'].astype('string').str.strip().replace('', 'Unknown') == filters['Sector']]
+
+        return out
+
+    return _apply(df_completed), _apply(df_requested)
+
+def build_aggrid(df: pd.DataFrame, key: str, selectable=True, height=280):
+    """Render a grid and return selected row (dict) or None."""
+    gb = GridOptionsBuilder.from_dataframe(df)
+    gb.configure_default_column(resizable=True, sortable=True, filter=True)
+    if selectable:
+        gb.configure_selection(selection_mode='single', use_checkbox=True)
+    else:
+        gb.configure_selection(selection_mode='none')
+    go = gb.build()
+    grid = AgGrid(
+        df,
+        gridOptions=go,
+        update_mode=GridUpdateMode.SELECTION_CHANGED,
+        fit_columns_on_grid_load=True,
+        height=height,
+        allow_unsafe_jscode=True,
+        key=key,
+    )
+    sel = grid.get("selected_rows", [])
+    return sel[0] if sel else None
+
 # -----------------------
 # Sidebar controls
 # -----------------------
@@ -64,7 +110,16 @@ with st.sidebar:
     )
 
 # -----------------------
-# Default placeholder values
+# Session filter state (table-driven)
+# -----------------------
+if "xf" not in st.session_state:
+    st.session_state.xf = {"Category": None, "Client": None, "Sector": None}
+
+def set_filter(which, value):
+    st.session_state.xf[which] = value if value else None
+
+# -----------------------
+# Defaults / placeholders
 # -----------------------
 collateral_shipped = 0
 content_pieces_shipped = 0
@@ -79,6 +134,7 @@ campaigns_created = 0
 conversions = 0
 initiatives_taken = 0
 
+# Placeholder table data
 collateral_delivery_df = pd.DataFrame({"Category": FIXED_CATEGORIES, "Total Collateral": 0})
 pipeline_by_category_df = pd.DataFrame({"Category": FIXED_CATEGORIES, "Open Pipeline Tasks": 0})
 top_clients_df = pd.DataFrame({"Client": pd.Series(dtype='string'), "Total Collateral": pd.Series(dtype='float')})
@@ -119,144 +175,194 @@ if uploaded_file:
         if not start_date or not end_date:
             st.warning("Select **from date** and **end date** in the sidebar to load the dashboard.")
         else:
-            st.header(f"Campaign Pipeline Dashboard")
+            st.header("Campaign Pipeline Dashboard")
             st.markdown("---")
 
             ts_start = pd.Timestamp(start_date)
             ts_end = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
 
-            # --- Filter data ---
+            # --- Base frames by date ---
             if df_task is not None:
                 comp = safe_series(df_task, "Completion Date")
                 mask_completion = comp.between(ts_start, ts_end, inclusive="both")
-                filtered_task_completed = df_task.loc[mask_completion]
-            else:
-                filtered_task_completed = pd.DataFrame()
+                filtered_task_completed_base = df_task.loc[mask_completion].copy()
 
-            # KPIs
-            noc = safe_series(filtered_task_completed, "No of Collaterals", dtype="float")
-            noc = pd.to_numeric(noc, errors="coerce")
-            collateral_shipped = float(noc.sum()) if not noc.empty else 0
-            cat_norm_completed = safe_series(filtered_task_completed, "Category").map(normalize_category)
-            content_pieces_shipped = int(noc[cat_norm_completed == "Copy"].sum()) if not noc.empty else 0
-
-            if df_task is not None:
                 req = safe_series(df_task, "Requested Date")
                 mask_requested = req.between(ts_start, ts_end, inclusive="both")
-                filtered_task_requested = df_task.loc[mask_requested]
+                filtered_task_requested_base = df_task.loc[mask_requested].copy()
             else:
-                filtered_task_requested = pd.DataFrame()
+                filtered_task_completed_base = pd.DataFrame()
+                filtered_task_requested_base = pd.DataFrame()
 
-            requests_received = int(len(filtered_task_requested))
-            status_req = safe_series(filtered_task_requested, "Status").fillna("")
+            # Normalize key columns for strict filters
+            if "Client" in filtered_task_completed_base.columns:
+                filtered_task_completed_base["Client"] = (
+                    filtered_task_completed_base["Client"].astype("string").fillna("").str.strip().replace("", "Unknown")
+                )
+            if "Sector" in filtered_task_completed_base.columns:
+                filtered_task_completed_base["Sector"] = (
+                    filtered_task_completed_base["Sector"].astype("string").fillna("").str.strip().replace("", "Unknown")
+                )
+            if "Client" in filtered_task_requested_base.columns:
+                filtered_task_requested_base["Client"] = (
+                    filtered_task_requested_base["Client"].astype("string").fillna("").str.strip().replace("", "Unknown")
+                )
+            if "Sector" in filtered_task_requested_base.columns:
+                filtered_task_requested_base["Sector"] = (
+                    filtered_task_requested_base["Sector"].astype("string").fillna("").str.strip().replace("", "Unknown")
+                )
+
+            # ---------- Build grouped tables from CURRENT filters ----------
+            def build_tables(df_completed, df_requested, xf):
+                # Apply cross-filters to the frames
+                cdf, rdf = apply_cross_filters(df_completed, df_requested, xf)
+
+                # Collateral Delivery by Category (completed)
+                if not cdf.empty and 'No of Collaterals' in cdf.columns:
+                    tmp = cdf.copy()
+                    tmp['No of Collaterals'] = pd.to_numeric(tmp['No of Collaterals'], errors='coerce').fillna(0)
+                    tmp['Category'] = safe_series(tmp, 'Category').map(normalize_category)
+                    t1 = (tmp.groupby('Category', as_index=True)['No of Collaterals']
+                            .sum()
+                            .reindex(FIXED_CATEGORIES, fill_value=0)
+                            .rename('Total Collateral')
+                            .reset_index())
+                else:
+                    t1 = pd.DataFrame({"Category": FIXED_CATEGORIES, "Total Collateral": 0})
+
+                # Pipeline of Tasks by Category (requested window, open only)
+                if not rdf.empty:
+                    tmp = rdf.copy()
+                    status = safe_series(tmp, "Status").fillna("")
+                    open_mask = ~status.isin(["Completed", "Design Completed", "Copy Completed"])
+                    tmp = tmp.loc[open_mask]
+                    tmp['Category'] = safe_series(tmp, 'Category').map(normalize_category)
+                    t2 = (tmp.groupby('Category', as_index=True)
+                            .size()
+                            .reindex(FIXED_CATEGORIES, fill_value=0)
+                            .rename('Open Pipeline Tasks')
+                            .reset_index())
+                else:
+                    t2 = pd.DataFrame({"Category": FIXED_CATEGORIES, "Open Pipeline Tasks": 0})
+
+                # Top 7 Clients (completed)
+                if not cdf.empty and 'No of Collaterals' in cdf.columns and 'Client' in cdf.columns:
+                    tmp = cdf.copy()
+                    tmp['No of Collaterals'] = pd.to_numeric(tmp['No of Collaterals'], errors='coerce').fillna(0)
+                    t3 = (tmp.groupby('Client', as_index=False)['No of Collaterals']
+                            .sum()
+                            .rename(columns={'No of Collaterals': 'Total Collateral'})
+                            .sort_values('Total Collateral', ascending=False)
+                            .head(7))
+                else:
+                    t3 = pd.DataFrame({"Client": [], "Total Collateral": []})
+
+                # Top 7 Sectors (completed)
+                if not cdf.empty and 'No of Collaterals' in cdf.columns and 'Sector' in cdf.columns:
+                    tmp = cdf.copy()
+                    tmp['No of Collaterals'] = pd.to_numeric(tmp['No of Collaterals'], errors='coerce').fillna(0)
+                    t4 = (tmp.groupby('Sector', as_index=False)['No of Collaterals']
+                            .sum()
+                            .rename(columns={'No of Collaterals': 'Total Collateral'})
+                            .sort_values('Total Collateral', ascending=False)
+                            .head(7))
+                else:
+                    t4 = pd.DataFrame({"Sector": [], "Total Collateral": []})
+
+                return t1, t2, t3, t4, cdf, rdf
+
+            # Build current tables for display and capture selections
+            collateral_delivery_df, pipeline_by_category_df, top_clients_df, top_sectors_df, cdf_all, rdf_all = \
+                build_tables(filtered_task_completed_base, filtered_task_requested_base, st.session_state.xf)
+
+            # -----------------------
+            # TABLES (interactive) — set filters by clicking rows
+            # -----------------------
+            t1, t2 = st.columns(2)
+            with t1:
+                st.subheader("Collateral Delivery by Category type")
+                sel = build_aggrid(collateral_delivery_df, key="grid_cat")
+                if sel:
+                    set_filter("Category", sel.get("Category"))
+            with t2:
+                st.subheader("Pipeline of Tasks by Category")
+                sel = build_aggrid(pipeline_by_category_df, key="grid_pipe")
+                if sel:
+                    set_filter("Category", sel.get("Category"))  # pipeline also sets Category filter
+
+            b1, b2 = st.columns(2)
+            with b1:
+                st.subheader("Top 7 clients based on quantity of collaterals")
+                sel = build_aggrid(top_clients_df, key="grid_client")
+                if sel:
+                    set_filter("Client", sel.get("Client"))
+            with b2:
+                st.subheader("Top 7 Sectors on Quantity of Collateral")
+                sel = build_aggrid(top_sectors_df, key="grid_sector")
+                if sel:
+                    set_filter("Sector", sel.get("Sector"))
+
+            c1, c2, c3 = st.columns([1,1,2])
+            with c1:
+                if st.button("Clear filters"):
+                    set_filter("Category", None); set_filter("Client", None); set_filter("Sector", None)
+                    st.experimental_rerun()
+            with c2:
+                st.write("**Active filters:**")
+                st.write({k: v for k, v in st.session_state.xf.items() if v})
+
+            # -----------------------
+            # KPIs — recompute from filtered frames
+            # -----------------------
+            cdf, rdf = apply_cross_filters(filtered_task_completed_base, filtered_task_requested_base, st.session_state.xf)
+
+            noc = safe_series(cdf, "No of Collaterals", dtype="float")
+            noc = pd.to_numeric(noc, errors="coerce")
+            collateral_shipped = float(noc.sum()) if not noc.empty else 0
+
+            cat_norm_completed = safe_series(cdf, "Category").map(normalize_category)
+            content_pieces_shipped = int(noc[cat_norm_completed == "Copy"].sum()) if not noc.empty else 0
+
+            requests_received = int(len(rdf))
+            status_req = safe_series(rdf, "Status").fillna("")
             pipeline_pending = int((~status_req.isin(["Completed", "Design Completed", "Copy Completed"])).sum())
 
             def count_leads(df):
                 if df is None or df.empty:
                     return 0
                 ld = safe_series(df, "Lead Date")
-                return int(ld.between(ts_start, ts_end, inclusive="both").sum())
+                return int(ld.between(pd.Timestamp(start_date), pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)).sum())
 
             new_leads_generated = count_leads(df_sales_leads)
             brand_leads_generated = count_leads(df_brand_leads)
             partner_leads_generated = count_leads(df_partner_leads)
 
-            rcat_norm = safe_series(filtered_task_requested, "Category").map(normalize_category).fillna("")
+            rcat_norm = safe_series(rdf, "Category").map(normalize_category).fillna("")
             campaigns_created = int((rcat_norm == "Campaign").sum())
             initiatives_taken = int((rcat_norm == "Initiatives").sum())
 
-            # Tables
-            if 'No of Collaterals' in filtered_task_completed.columns:
-                tmp = filtered_task_completed.copy()
-                tmp['No of Collaterals'] = pd.to_numeric(tmp['No of Collaterals'], errors='coerce').fillna(0)
-                tmp['Category'] = safe_series(tmp, 'Category').map(normalize_category)
-                collateral_delivery_df = (
-                    tmp.groupby('Category', as_index=True)['No of Collaterals']
-                       .sum()
-                       .reindex(FIXED_CATEGORIES, fill_value=0)
-                       .rename('Total Collateral')
-                       .reset_index()
-                )
+            st.markdown("---")
 
-            if not filtered_task_requested.empty:
-                tmp = filtered_task_requested.copy()
-                status = safe_series(tmp, "Status").fillna("")
-                open_mask = ~status.isin(["Completed", "Design Completed", "Copy Completed"])
-                tmp = tmp.loc[open_mask]
-                tmp['Category'] = safe_series(tmp, 'Category').map(normalize_category)
-                pipeline_by_category_df = (
-                    tmp.groupby('Category', as_index=True)
-                       .size()
-                       .reindex(FIXED_CATEGORIES, fill_value=0)
-                       .rename('Open Pipeline Tasks')
-                       .reset_index()
-                )
-
-            if not filtered_task_completed.empty and 'No of Collaterals' in filtered_task_completed.columns:
-                if 'Client' in filtered_task_completed.columns:
-                    tmp = filtered_task_completed.copy()
-                    tmp['No of Collaterals'] = pd.to_numeric(tmp['No of Collaterals'], errors='coerce').fillna(0)
-                    tmp['Client'] = tmp['Client'].astype('string').fillna('').str.strip().replace('', 'Unknown')
-                    top_clients_df = (
-                        tmp.groupby('Client', as_index=False)['No of Collaterals']
-                           .sum()
-                           .rename(columns={'No of Collaterals': 'Total Collateral'})
-                           .sort_values('Total Collateral', ascending=False)
-                           .head(7)
-                    )
-
-                if 'Sector' in filtered_task_completed.columns:
-                    tmp = filtered_task_completed.copy()
-                    tmp['No of Collaterals'] = pd.to_numeric(tmp['No of Collaterals'], errors='coerce').fillna(0)
-                    tmp['Sector'] = tmp['Sector'].astype('string').fillna('').str.strip().replace('', 'Unknown')
-                    top_sectors_df = (
-                        tmp.groupby('Sector', as_index=False)['No of Collaterals']
-                           .sum()
-                           .rename(columns={'No of Collaterals': 'Total Collateral'})
-                           .sort_values('Total Collateral', ascending=False)
-                           .head(7)
-                    )
+            # KPI metrics layout (now reflects table selections)
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Number of Collaterals shipped", int(collateral_shipped))
+                st.metric("Number of Content pieces shipped", int(content_pieces_shipped))
+                st.metric("Partner Leads Generated", int(partner_leads_generated))
+            with col2:
+                st.metric("Number of Requests received", int(requests_received))
+                st.metric("New leads generated", int(new_leads_generated))
+                st.metric("Brand leads Generated", int(brand_leads_generated))
+            with col3:
+                st.metric("Total Pipeline Pending", int(pipeline_pending))
+                st.metric("Marketing Leads in Process", int(marketing_leads_in_process))
+                st.metric("Brand leads in conversion cycle", int(brand_conversion_cycle))
+            with col4:
+                st.metric("New Campaigns Created", int(campaigns_created))
+                st.metric("Conversions", int(conversions))
+                st.metric("New Initiatives taken", int(initiatives_taken))
 
     except Exception as e:
         st.warning(f"Failed to parse uploaded file, showing placeholder data. Error: {e}")
-
-# -----------------------
-# KPI metrics layout
-# -----------------------
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    st.metric("Number of Collaterals shipped", int(collateral_shipped))
-    st.metric("Number of Content pieces shipped", int(content_pieces_shipped))
-    st.metric("Partner Leads Generated", int(partner_leads_generated))
-with col2:
-    st.metric("Number of Requests received", int(requests_received))
-    st.metric("New leads generated", int(new_leads_generated))
-    st.metric("Brand leads Generated", int(brand_leads_generated))
-with col3:
-    st.metric("Total Pipeline Pending", int(pipeline_pending))
-    st.metric("Marketing Leads in Process", int(marketing_leads_in_process))
-    st.metric("Brand leads in conversion cycle", int(brand_conversion_cycle))
-with col4:
-    st.metric("New Campaigns Created", int(campaigns_created))
-    st.metric("Conversions", int(conversions))
-    st.metric("New Initiatives taken", int(initiatives_taken))
-
-st.markdown("---")
-
-# -----------------------
-# Tables
-# -----------------------
-t1, t2 = st.columns(2)
-with t1:
-    st.subheader("Collateral Delivery by Category type")
-    st.dataframe(collateral_delivery_df, use_container_width=True)
-with t2:
-    st.subheader("Pipeline of Tasks by Category")
-    st.dataframe(pipeline_by_category_df, use_container_width=True)
-b1, b2 = st.columns(2)
-with b1:
-    st.subheader("Top 7 clients based on quantity of collaterals")
-    st.dataframe(top_clients_df, use_container_width=True)
-with b2:
-    st.subheader("Top 7 Sectors on Quantity of Collateral")
-    st.dataframe(top_sectors_df, use_container_width=True)
+else:
+    st.info("Upload an Excel file in the sidebar to begin.")
