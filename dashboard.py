@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 
-# Optional import guarded so app works even if AgGrid isn't installed
+# Try to import AgGrid (app still works without it when cross filtering is OFF)
 AGGRID_AVAILABLE = True
 try:
     from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
@@ -16,21 +16,21 @@ st.set_page_config(page_title="Marketing Performance & Pipeline Dashboard", layo
 # Helpers
 # -----------------------
 def safe_series(df: pd.DataFrame, col: str, dtype=None):
-    if df is None:
+    if df is None or (hasattr(df, "empty") and df.empty):
         return pd.Series(dtype=dtype)
     if col in df.columns:
         return df[col]
     return pd.Series([pd.NA] * len(df), index=df.index, dtype=dtype)
 
 def to_datetime_inplace(df: pd.DataFrame, cols):
-    if df is None:
+    if df is None or df.empty:
         return
     for c in cols:
         if c in df.columns:
             df[c] = pd.to_datetime(df[c], errors="coerce")
 
 def to_numeric_inplace(df: pd.DataFrame, cols):
-    if df is None:
+    if df is None or df.empty:
         return
     for c in cols:
         if c in df.columns:
@@ -60,36 +60,6 @@ def normalize_category(x: object) -> str:
     key = s.lower()
     return _CANON.get(key, "Not filled Properly")
 
-# -----------------------
-# Sidebar controls
-# -----------------------
-with st.sidebar:
-    st.header("Controls")
-    uploaded_file = st.file_uploader("Upload dashboard Excel file", type=["xlsx"], accept_multiple_files=False)
-    # Only show date range after a successful upload
-    if uploaded_file:
-        date_range = st.date_input(
-            "Select Completion Date Range",
-            value=[date.today(), date.today()],
-            key="date_range",
-        )
-    else:
-        date_range = None
-
-    # Cross filtering toggle
-    enable_xf = st.toggle("Enable Cross Filtering", value=False, help="When ON, click rows in tables to filter KPIs and other tables.")
-    if enable_xf and not AGGRID_AVAILABLE:
-        st.warning("streamlit-aggrid is not installed. Disable cross filtering or add 'streamlit-aggrid==1.0.5' to requirements.txt.")
-
-# -----------------------
-# Session state for table-driven filters
-# -----------------------
-if "xf" not in st.session_state:
-    st.session_state.xf = {"Category": None, "Client": None, "Sector": None}
-
-def set_filter(which, value):
-    st.session_state.xf[which] = value if value else None
-
 def apply_cross_filters(df_completed: pd.DataFrame, df_requested: pd.DataFrame, filters: dict):
     """Apply Category/Client/Sector filters to completed/requested frames."""
     def _apply(df):
@@ -98,18 +68,20 @@ def apply_cross_filters(df_completed: pd.DataFrame, df_requested: pd.DataFrame, 
         out = df.copy()
 
         # Category (normalized)
-        if 'Category' in out.columns:
-            out['_norm_cat'] = safe_series(out, 'Category').map(normalize_category)
-            if filters.get('Category'):
-                out = out.loc[out['_norm_cat'] == filters['Category']]
+        if "Category" in out.columns:
+            out["_norm_cat"] = safe_series(out, "Category").map(normalize_category)
+            if filters.get("Category"):
+                out = out.loc[out["_norm_cat"] == filters["Category"]]
 
         # Client (strict)
-        if filters.get('Client') and 'Client' in out.columns:
-            out = out.loc[out['Client'].astype('string').str.strip().replace('', 'Unknown') == filters['Client']]
+        if filters.get("Client") and "Client" in out.columns:
+            strict_client = out["Client"].astype("string").fillna("").str.strip().replace("", "Unknown")
+            out = out.loc[strict_client == filters["Client"]]
 
         # Sector (strict)
-        if filters.get('Sector') and 'Sector' in out.columns:
-            out = out.loc[out['Sector'].astype('string').str.strip().replace('', 'Unknown') == filters['Sector']]
+        if filters.get("Sector") and "Sector" in out.columns:
+            strict_sector = out["Sector"].astype("string").fillna("").str.strip().replace("", "Unknown")
+            out = out.loc[strict_sector == filters["Sector"]]
 
         return out
 
@@ -120,9 +92,9 @@ def build_aggrid(df: pd.DataFrame, key: str, selectable=True, height=280):
     gb = GridOptionsBuilder.from_dataframe(df)
     gb.configure_default_column(resizable=True, sortable=True, filter=True)
     if selectable:
-        gb.configure_selection(selection_mode='single', use_checkbox=True)
+        gb.configure_selection(selection_mode="single", use_checkbox=True)
     else:
-        gb.configure_selection(selection_mode='none')
+        gb.configure_selection(selection_mode="none")
     go = gb.build()
     grid = AgGrid(
         df,
@@ -137,7 +109,42 @@ def build_aggrid(df: pd.DataFrame, key: str, selectable=True, height=280):
     return sel[0] if sel else None
 
 # -----------------------
-# Defaults / placeholders
+# Sidebar controls
+# -----------------------
+with st.sidebar:
+    st.header("Controls")
+    uploaded_file = st.file_uploader("Upload dashboard Excel file", type=["xlsx"], accept_multiple_files=False)
+
+    # Date range appears only after successful upload
+    if uploaded_file:
+        date_range = st.date_input(
+            "Select Completion Date Range",
+            value=[date.today(), date.today()],
+            key="date_range",
+        )
+    else:
+        date_range = None
+
+    # Cross filtering toggle
+    enable_xf = st.toggle(
+        "Enable Cross Filtering",
+        value=False,
+        help="When ON, click rows in tables to filter all KPIs and tables."
+    )
+    if enable_xf and not AGGRID_AVAILABLE:
+        st.warning("streamlit-aggrid is not installed. Disable cross filtering or add 'streamlit-aggrid==1.0.5' to requirements.txt.")
+
+# -----------------------
+# Session state for table-driven filters
+# -----------------------
+if "xf" not in st.session_state:
+    st.session_state.xf = {"Category": None, "Client": None, "Sector": None}
+
+def set_filter(which, value):
+    st.session_state.xf[which] = value if value else None
+
+# -----------------------
+# Defaults / placeholders (so UI renders even before data)
 # -----------------------
 collateral_shipped = 0
 content_pieces_shipped = 0
@@ -152,11 +159,10 @@ campaigns_created = 0
 conversions = 0
 initiatives_taken = 0
 
-# Placeholder table data (rendered later; KPIs always first)
 collateral_delivery_df = pd.DataFrame({"Category": FIXED_CATEGORIES, "Total Collateral": 0})
 pipeline_by_category_df = pd.DataFrame({"Category": FIXED_CATEGORIES, "Open Pipeline Tasks": 0})
-top_clients_df = pd.DataFrame({"Client": pd.Series(dtype='string'), "Total Collateral": pd.Series(dtype='float')})
-top_sectors_df = pd.DataFrame({"Sector": pd.Series(dtype='string'), "Total Collateral": pd.Series(dtype='float')})
+top_clients_df = pd.DataFrame({"Client": pd.Series(dtype="string"), "Total Collateral": pd.Series(dtype="float")})
+top_sectors_df = pd.DataFrame({"Sector": pd.Series(dtype="string"), "Total Collateral": pd.Series(dtype="float")})
 
 # -----------------------
 # Data load + processing
@@ -188,7 +194,7 @@ if uploaded_file and date_range:
             ts_start = pd.Timestamp(start_date)
             ts_end = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
 
-            if df_task is not None:
+            if df_task is not None and not df_task.empty:
                 comp = safe_series(df_task, "Completion Date")
                 mask_completion = comp.between(ts_start, ts_end, inclusive="both")
                 df_completed_base = df_task.loc[mask_completion].copy()
@@ -201,13 +207,13 @@ if uploaded_file and date_range:
                 df_requested_base = pd.DataFrame()
 
             # Normalize strict columns for later filters
-            if "Client" in df_completed_base.columns:
+            if not df_completed_base.empty and "Client" in df_completed_base.columns:
                 df_completed_base["Client"] = df_completed_base["Client"].astype("string").fillna("").str.strip().replace("", "Unknown")
-            if "Sector" in df_completed_base.columns:
+            if not df_completed_base.empty and "Sector" in df_completed_base.columns:
                 df_completed_base["Sector"] = df_completed_base["Sector"].astype("string").fillna("").str.strip().replace("", "Unknown")
-            if "Client" in df_requested_base.columns:
+            if not df_requested_base.empty and "Client" in df_requested_base.columns:
                 df_requested_base["Client"] = df_requested_base["Client"].astype("string").fillna("").str.strip().replace("", "Unknown")
-            if "Sector" in df_requested_base.columns:
+            if not df_requested_base.empty and "Sector" in df_requested_base.columns:
                 df_requested_base["Sector"] = df_requested_base["Sector"].astype("string").fillna("").str.strip().replace("", "Unknown")
 
             # Apply cross filters if enabled
@@ -219,32 +225,42 @@ if uploaded_file and date_range:
             # -----------------------
             # KPIs FIRST (respect cross filters if enabled)
             # -----------------------
-            noc = safe_series(cdf, "No of Collaterals", dtype="float")
-            noc = pd.to_numeric(noc, errors="coerce")
-            collateral_shipped = float(noc.sum()) if not noc.empty else 0
+            if cdf is not None and not cdf.empty:
+                noc = safe_series(cdf, "No of Collaterals", dtype="float")
+                noc = pd.to_numeric(noc, errors="coerce")
+                collateral_shipped = float(noc.sum()) if not noc.empty else 0
 
-            cat_norm_completed = safe_series(cdf, "Category").map(normalize_category)
-            content_pieces_shipped = int(noc[cat_norm_completed == "Copy"].sum()) if not noc.empty else 0
+                cat_norm_completed = safe_series(cdf, "Category").map(normalize_category)
+                content_pieces_shipped = int(noc[cat_norm_completed == "Copy"].sum()) if not noc.empty else 0
+            else:
+                collateral_shipped = 0
+                content_pieces_shipped = 0
 
-            requests_received = int(len(rdf))
-            status_req = safe_series(rdf, "Status").fillna("")
-            pipeline_pending = int((~status_req.isin(["Completed", "Design Completed", "Copy Completed"])).sum())
+            if rdf is not None and not rdf.empty:
+                requests_received = int(len(rdf))
+                status_req = safe_series(rdf, "Status").fillna("")
+                pipeline_pending = int((~status_req.isin(["Completed", "Design Completed", "Copy Completed"])).sum())
+
+                rcat_norm = safe_series(rdf, "Category").map(normalize_category).fillna("")
+                campaigns_created = int((rcat_norm == "Campaign").sum())
+                initiatives_taken = int((rcat_norm == "Initiatives").sum())
+            else:
+                requests_received = 0
+                pipeline_pending = 0
+                campaigns_created = 0
+                initiatives_taken = 0
 
             def count_leads(df):
                 if df is None or df.empty:
                     return 0
                 ld = safe_series(df, "Lead Date")
-                return int(ld.between(ts_start, ts_end).sum())
+                return int(ld.between(ts_start, ts_end, inclusive="both").sum())
 
             new_leads_generated = count_leads(df_sales_leads)
             brand_leads_generated = count_leads(df_brand_leads)
             partner_leads_generated = count_leads(df_partner_leads)
 
-            rcat_norm = safe_series(rdf, "Category").map(normalize_category).fillna("")
-            campaigns_created = int((rcat_norm == "Campaign").sum())
-            initiatives_taken = int((rcat_norm == "Initiatives").sum())
-
-            # KPI metrics layout (always before tables)
+            # KPI metrics layout (ALWAYS before tables)
             col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("Number of Collaterals shipped", int(collateral_shipped))
@@ -266,58 +282,58 @@ if uploaded_file and date_range:
             st.markdown("---")
 
             # -----------------------
-            # Build tables (from cdf/rdf)
+            # Build tables from cdf/rdf
             # -----------------------
             # Collateral Delivery by Category (completed)
-            if not cdf.empty and 'No of Collaterals' in cdf.columns:
+            if cdf is not None and not cdf.empty and "No of Collaterals" in cdf.columns:
                 tmp = cdf.copy()
-                tmp['No of Collaterals'] = pd.to_numeric(tmp['No of Collaterals'], errors='coerce').fillna(0)
-                tmp['Category'] = safe_series(tmp, 'Category').map(normalize_category)
+                tmp["No of Collaterals"] = pd.to_numeric(tmp["No of Collaterals"], errors="coerce").fillna(0)
+                tmp["Category"] = safe_series(tmp, "Category").map(normalize_category)
                 collateral_delivery_df = (
-                    tmp.groupby('Category', as_index=True)['No of Collaterals']
-                       .sum()
-                       .reindex(FIXED_CATEGORIES, fill_value=0)
-                       .rename('Total Collateral')
-                       .reset_index()
+                    tmp.groupby("Category", as_index=True)["No of Collaterals"]
+                      .sum()
+                      .reindex(FIXED_CATEGORIES, fill_value=0)
+                      .rename("Total Collateral")
+                      .reset_index()
                 )
 
             # Pipeline of Tasks by Category (requested, open only)
-            if not rdf.empty:
+            if rdf is not None and not rdf.empty:
                 tmp = rdf.copy()
                 status = safe_series(tmp, "Status").fillna("")
                 open_mask = ~status.isin(["Completed", "Design Completed", "Copy Completed"])
                 tmp = tmp.loc[open_mask]
-                tmp['Category'] = safe_series(tmp, 'Category').map(normalize_category)
+                tmp["Category"] = safe_series(tmp, "Category").map(normalize_category)
                 pipeline_by_category_df = (
-                    tmp.groupby('Category', as_index=True)
-                       .size()
-                       .reindex(FIXED_CATEGORIES, fill_value=0)
-                       .rename('Open Pipeline Tasks')
-                       .reset_index()
+                    tmp.groupby("Category", as_index=True)
+                      .size()
+                      .reindex(FIXED_CATEGORIES, fill_value=0)
+                      .rename("Open Pipeline Tasks")
+                      .reset_index()
                 )
 
             # Top 7 clients (completed, strict 'Client')
-            if not cdf.empty and 'No of Collaterals' in cdf.columns and 'Client' in cdf.columns:
+            if cdf is not None and not cdf.empty and "No of Collaterals" in cdf.columns and "Client" in cdf.columns:
                 tmp = cdf.copy()
-                tmp['No of Collaterals'] = pd.to_numeric(tmp['No of Collaterals'], errors='coerce').fillna(0)
+                tmp["No of Collaterals"] = pd.to_numeric(tmp["No of Collaterals"], errors="coerce").fillna(0)
                 top_clients_df = (
-                    tmp.groupby('Client', as_index=False)['No of Collaterals']
-                       .sum()
-                       .rename(columns={'No of Collaterals': 'Total Collateral'})
-                       .sort_values('Total Collateral', ascending=False)
-                       .head(7)
+                    tmp.groupby("Client", as_index=False)["No of Collaterals"]
+                      .sum()
+                      .rename(columns={"No of Collaterals": "Total Collateral"})
+                      .sort_values("Total Collateral", ascending=False)
+                      .head(7)
                 )
 
             # Top 7 sectors (completed, strict 'Sector')
-            if not cdf.empty and 'No of Collaterals' in cdf.columns and 'Sector' in cdf.columns:
+            if cdf is not None and not cdf.empty and "No of Collaterals" in cdf.columns and "Sector" in cdf.columns:
                 tmp = cdf.copy()
-                tmp['No of Collaterals'] = pd.to_numeric(tmp['No of Collaterals'], errors='coerce').fillna(0)
+                tmp["No of Collaterals"] = pd.to_numeric(tmp["No of Collaterals"], errors="coerce").fillna(0)
                 top_sectors_df = (
-                    tmp.groupby('Sector', as_index=False)['No of Collaterals']
-                       .sum()
-                       .rename(columns={'No of Collaterals': 'Total Collateral'})
-                       .sort_values('Total Collateral', ascending=False)
-                       .head(7)
+                    tmp.groupby("Sector", as_index=False)["No of Collaterals"]
+                      .sum()
+                      .rename(columns={"No of Collaterals": "Total Collateral"})
+                      .sort_values("Total Collateral", ascending=False)  # <-- fixed here
+                      .head(7)
                 )
 
             # -----------------------
@@ -363,10 +379,12 @@ if uploaded_file and date_range:
 
             # Clear filters only when cross filtering is on
             if enable_xf and AGGRID_AVAILABLE:
-                c1, c2 = st.columns([1,3])
+                c1, c2 = st.columns([1, 3])
                 with c1:
                     if st.button("Clear filters"):
-                        set_filter("Category", None); set_filter("Client", None); set_filter("Sector", None)
+                        set_filter("Category", None)
+                        set_filter("Client", None)
+                        set_filter("Sector", None)
                         st.experimental_rerun()
                 with c2:
                     st.write("**Active filters:**", {k: v for k, v in st.session_state.xf.items() if v})
