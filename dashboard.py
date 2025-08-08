@@ -23,14 +23,14 @@ def safe_series(df: pd.DataFrame, col: str, dtype=None):
     return pd.Series([pd.NA] * len(df), index=df.index, dtype=dtype)
 
 def to_datetime_inplace(df: pd.DataFrame, cols):
-    if df is None or df.empty:
+    if df is None or (hasattr(df, "empty") and df.empty):
         return
     for c in cols:
         if c in df.columns:
             df[c] = pd.to_datetime(df[c], errors="coerce")
 
 def to_numeric_inplace(df: pd.DataFrame, cols):
-    if df is None or df.empty:
+    if df is None or (hasattr(df, "empty") and df.empty):
         return
     for c in cols:
         if c in df.columns:
@@ -44,6 +44,13 @@ def parse_range(r):
     if isinstance(r, (list, tuple)) and len(r) == 2:
         return r[0], r[1]
     return None, None
+
+def as_scalar_str(v):
+    """Return a trimmed string if v is a scalar string-like; else None."""
+    if isinstance(v, str):
+        s = v.strip()
+        return s if s else None
+    return None
 
 # ---- Fixed categories & normalizer ----
 FIXED_CATEGORIES = [
@@ -61,7 +68,11 @@ def normalize_category(x: object) -> str:
     return _CANON.get(key, "Not filled Properly")
 
 def apply_cross_filters(df_completed: pd.DataFrame, df_requested: pd.DataFrame, filters: dict):
-    """Apply Category/Client/Sector filters to completed/requested frames."""
+    """Apply Category/Client/Sector filters to completed/requested frames (only scalar string filters)."""
+    cat_f = as_scalar_str(filters.get("Category"))
+    cli_f = as_scalar_str(filters.get("Client"))
+    sec_f = as_scalar_str(filters.get("Sector"))
+
     def _apply(df):
         if df is None or df.empty:
             return df
@@ -70,18 +81,18 @@ def apply_cross_filters(df_completed: pd.DataFrame, df_requested: pd.DataFrame, 
         # Category (normalized)
         if "Category" in out.columns:
             out["_norm_cat"] = safe_series(out, "Category").map(normalize_category)
-            if filters.get("Category"):
-                out = out.loc[out["_norm_cat"] == filters["Category"]]
+            if cat_f is not None:
+                out = out.loc[out["_norm_cat"] == cat_f]
 
         # Client (strict)
-        if filters.get("Client") and "Client" in out.columns:
+        if cli_f is not None and "Client" in out.columns:
             strict_client = out["Client"].astype("string").fillna("").str.strip().replace("", "Unknown")
-            out = out.loc[strict_client == filters["Client"]]
+            out = out.loc[strict_client == cli_f]
 
         # Sector (strict)
-        if filters.get("Sector") and "Sector" in out.columns:
+        if sec_f is not None and "Sector" in out.columns:
             strict_sector = out["Sector"].astype("string").fillna("").str.strip().replace("", "Unknown")
-            out = out.loc[strict_sector == filters["Sector"]]
+            out = out.loc[strict_sector == sec_f]
 
         return out
 
@@ -141,7 +152,7 @@ if "xf" not in st.session_state:
     st.session_state.xf = {"Category": None, "Client": None, "Sector": None}
 
 def set_filter(which, value):
-    st.session_state.xf[which] = value if value else None
+    st.session_state.xf[which] = as_scalar_str(value)  # force scalar string or None
 
 # -----------------------
 # Defaults / placeholders (so UI renders even before data)
@@ -332,7 +343,7 @@ if uploaded_file and date_range:
                     tmp.groupby("Sector", as_index=False)["No of Collaterals"]
                       .sum()
                       .rename(columns={"No of Collaterals": "Total Collateral"})
-                      .sort_values("Total Collateral", ascending=False)  # <-- fixed here
+                      .sort_values("Total Collateral", ascending=False)
                       .head(7)
                 )
 
