@@ -316,7 +316,7 @@ if uploaded_file and date_range:
                     tmp.groupby('Sector', as_index=False)['No of Collaterals']
                        .sum()
                        .rename(columns={'No of Collaterals': 'Total Collateral'})
-                       .sort_values('Total Collateral', descending=True)
+                       .sort_values('Total Collateral', ascending=False)
                        .head(7)
                 )
 
