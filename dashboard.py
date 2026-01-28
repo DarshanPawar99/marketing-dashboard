@@ -242,7 +242,7 @@ with col4:
     st.metric("New Initiatives taken", int(initiatives_taken))
 
 # -----------------------
-# Tables (ALL IN ONE ROW)
+# Tables (ALL IN ONE ROW) using st.table
 # -----------------------
 st.markdown("---")
 
@@ -250,18 +250,19 @@ c1, c2, c3, c4 = st.columns(4)
 
 with c1:
     st.subheader("Collateral Delivery by Category type")
-    st.dataframe(collateral_delivery_df, use_container_width=True, height=320)
+    st.table(collateral_delivery_df)
 
 with c2:
     st.subheader("Pipeline of Tasks by Category")
-    st.dataframe(pipeline_by_category_df, use_container_width=True, height=320)
+    st.table(pipeline_by_category_df)
 
 with c3:
     st.subheader("Top 7 clients based on quantity of collaterals")
-    st.dataframe(top_clients_df, use_container_width=True, height=320)
+    st.table(top_clients_df)
 
 with c4:
     st.subheader("Top 7 Sectors on Quantity of Collateral")
-    st.dataframe(top_sectors_df, use_container_width=True, height=320)
+    st.table(top_sectors_df)
+
 
 
