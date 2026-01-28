@@ -250,19 +250,21 @@ c1, c2, c3, c4 = st.columns(4)
 
 with c1:
     st.subheader("Collateral Delivery by Category type")
-    st.table(collateral_delivery_df)
+    st.table(collateral_delivery_df.reset_index(drop=True))
 
 with c2:
     st.subheader("Pipeline of Tasks by Category")
-    st.table(pipeline_by_category_df)
+    st.table(pipeline_by_category_df.reset_index(drop=True))
 
 with c3:
     st.subheader("Top 7 clients based on quantity of collaterals")
-    st.table(top_clients_df)
+    st.table(top_clients_df.reset_index(drop=True))
 
 with c4:
     st.subheader("Top 7 Sectors on Quantity of Collateral")
-    st.table(top_sectors_df)
+    st.table(top_sectors_df.reset_index(drop=True))
+
+
 
 
 
