@@ -262,7 +262,8 @@ with c3:
 
 with c4:
     st.subheader("Top 7 Sectors on Quantity of Collateral")
-    st.table(top_sectors_df.reset_index(drop=True))
+    st.table(top_sectors_df)
+
 
 
 
