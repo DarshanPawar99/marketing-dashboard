@@ -241,22 +241,27 @@ with col4:
     st.metric("Conversions", int(conversions))
     st.metric("New Initiatives taken", int(initiatives_taken))
 
+# -----------------------
+# Tables (ALL IN ONE ROW)
+# -----------------------
 st.markdown("---")
 
-# -----------------------
-# Tables
-# -----------------------
-t1, t2 = st.columns(2)
-with t1:
+c1, c2, c3, c4 = st.columns(4)
+
+with c1:
     st.subheader("Collateral Delivery by Category type")
-    st.dataframe(collateral_delivery_df, use_container_width=True)
-with t2:
+    st.dataframe(collateral_delivery_df, use_container_width=True, height=320)
+
+with c2:
     st.subheader("Pipeline of Tasks by Category")
-    st.dataframe(pipeline_by_category_df, use_container_width=True)
-b1, b2 = st.columns(2)
-with b1:
+    st.dataframe(pipeline_by_category_df, use_container_width=True, height=320)
+
+with c3:
     st.subheader("Top 7 clients based on quantity of collaterals")
-    st.dataframe(top_clients_df, use_container_width=True)
-with b2:
+    st.dataframe(top_clients_df, use_container_width=True, height=320)
+
+with c4:
     st.subheader("Top 7 Sectors on Quantity of Collateral")
-    st.dataframe(top_sectors_df, use_container_width=True)
+    st.dataframe(top_sectors_df, use_container_width=True, height=320)
+
+
