@@ -422,9 +422,10 @@ with c2:
     st.table(pipeline_by_category_df.reset_index(drop=True))
 
 with c3:
-    st.subheader("Top 7 clients based on quantity of collaterals")
+    st.subheader("Top 7 clients based on Quantity of Collaterals")
     st.table(top_clients_df.reset_index(drop=True))
 
 with c4:
     st.subheader("Top 7 Sectors on Quantity of Collateral")
     st.table(top_sectors_df.reset_index(drop=True))
+
