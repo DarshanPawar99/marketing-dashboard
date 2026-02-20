@@ -177,6 +177,63 @@ def parse_range(r):
         return r[0], r[1]
     return None, None
 
+def _to_csv_bytes(df: pd.DataFrame) -> bytes:
+    return df.to_csv(index=False).encode("utf-8")
+
+def table_block(title: str, df: pd.DataFrame, value_col: str | None = None, help_text: str = ""):
+    """
+    Renders a table inside a yellow-styled card:
+    - Progress bar for numeric value_col (relative to max in table)
+    - Optional chart in expander
+    - CSV download button
+    """
+    st.markdown(f"#### {title}")
+    if help_text:
+        st.caption(help_text)
+
+    if df is None or df.empty:
+        st.info("No data for this selection.")
+        return
+
+    cfg = None
+    if value_col and value_col in df.columns:
+        vmax = float(pd.to_numeric(df[value_col], errors="coerce").fillna(0).max() or 0)
+        if vmax > 0:
+            cfg = {
+                value_col: st.column_config.ProgressColumn(
+                    value_col,
+                    help="Relative to max in this table",
+                    min_value=0.0,
+                    max_value=vmax,
+                    format="%d",
+                )
+            }
+        else:
+            cfg = {value_col: st.column_config.NumberColumn(value_col, format="%d")}
+
+    st.dataframe(
+        df.reset_index(drop=True),
+        use_container_width=True,
+        hide_index=True,
+        column_config=cfg,
+        height=260,
+    )
+
+    with st.expander("View chart"):
+        if value_col and value_col in df.columns:
+            chart_df = df[[df.columns[0], value_col]].copy()
+            chart_df = chart_df.set_index(chart_df.columns[0])
+            st.bar_chart(chart_df)
+
+    st.download_button(
+        "Download CSV",
+        data=_to_csv_bytes(df),
+        file_name=f"{title.lower().replace(' ', '_')}.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+
 # ---- Fixed categories & normalizer ----
 FIXED_CATEGORIES = [
     "Video", "Presentation", "Document", "Copy",
@@ -541,7 +598,7 @@ st.markdown(
 # -----------------------
 # KPI metrics layout (premium cards)
 # -----------------------
-st.markdown('<div class="card"><div class="card-title">Key Metrics</div>', unsafe_allow_html=True)
+st.markdown('<div class="card"><div class="card-title">Key Performance Metric</div>', unsafe_allow_html=True)
 
 r1, r2, r3, r4 = st.columns(4)
 
@@ -578,27 +635,46 @@ st.markdown("</div>", unsafe_allow_html=True)
 st.markdown("<hr/>", unsafe_allow_html=True)
 
 # -----------------------
-# Tables (ALL IN ONE ROW) in cards
+# Tables (ALL IN ONE ROW) in cards (upgraded)
+# - Progress bars for numeric columns
+# - Optional chart expanders
+# - CSV downloads
 # -----------------------
 st.markdown('<div class="card"><div class="card-title">Breakdowns</div>', unsafe_allow_html=True)
 
 c1, c2, c3, c4 = st.columns(4)
 
 with c1:
-    st.markdown("#### Collateral Delivery by Category")
-    st.dataframe(collateral_delivery_df.reset_index(drop=True), use_container_width=True, hide_index=True)
+    table_block(
+        "Collateral Delivery by Category",
+        collateral_delivery_df,
+        value_col="Total Collateral",
+        help_text="Sum of delivered collaterals (completed within selected range)."
+    )
 
 with c2:
-    st.markdown("#### Pipeline Tasks by Category")
-    st.dataframe(pipeline_by_category_df.reset_index(drop=True), use_container_width=True, hide_index=True)
+    table_block(
+        "Pipeline Tasks by Category",
+        pipeline_by_category_df,
+        value_col="Open Pipeline Tasks",
+        help_text="Open tasks from requests created in selected range (not completed)."
+    )
 
 with c3:
-    st.markdown("#### Top 7 Clients (by collaterals)")
-    st.dataframe(top_clients_df.reset_index(drop=True), use_container_width=True, hide_index=True)
+    table_block(
+        "Top 7 Clients (by collaterals)",
+        top_clients_df,
+        value_col="Total Collateral",
+        help_text="Highest collateral volume shipped by client."
+    )
 
 with c4:
-    st.markdown("#### Top 7 Sectors (by collaterals)")
-    st.dataframe(top_sectors_df.reset_index(drop=True), use_container_width=True, hide_index=True)
+    table_block(
+        "Top 7 Sectors (by collaterals)",
+        top_sectors_df,
+        value_col="Total Collateral",
+        help_text="Highest collateral volume shipped by sector."
+    )
 
 st.markdown("</div>", unsafe_allow_html=True)
 
